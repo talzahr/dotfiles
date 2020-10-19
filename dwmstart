@@ -1,0 +1,94 @@
+#!/bin/bash
+
+# Do later:  audio volume information
+
+timedate () {
+   DWMBAR_TIMEDATE="$(date +'%a, %b %d  %I:%M %p ')"
+}
+
+updates () {
+      DWMBAR_UPDATES="$(checkupdates | wc -l)"
+}
+
+cputemp () {
+   local hwmon=$(cat /sys/devices/pci0000:00/0000:00:18.3/hwmon/hwmon3/temp2_input)
+   DWMBAR_CPUTEMP="$(( $hwmon / 1000 ))"
+}
+
+gputemp () {
+   local hwmon=$(cat /sys/devices/pci0000:00/0000:00:03.1/0000:08:00.0/hwmon/hwmon2/temp1_input)
+   DWMBAR_GPUTEMP="$(( $hwmon / 1000 ))"
+}
+
+mainline() {
+      local myver=$(pacman -Qi linux-talzahr | grep "Version" |\
+         sed 's/^.* //;s/-.*$//;s/rc/-rc/')
+      local currver=$(curl -L 'http://www.kernel.org' 2> /dev/null |\
+         grep -A1 "mainline:" | tail -1 | sed 's/^.*<strong>//;s/<.*$//')
+      if [[ $currver != $myver ]]; then
+         DWMBAR_MAINLINE="⮚ kernel $currver released ⮘"
+      else
+         unset DWMBAR_MAINLINE
+      fi
+}
+
+temperature () {
+   echo -e "\\n\\n\\n---------      $(date '+%F %T')\\n" >> $HOME/dwmstart.log
+   local temp=$(curl 'https://www.aviationweather.gov/adds/dataserver_current/httpparam?datasource=metars&requesttype=retrieve&format=xml&hoursBeforeNow=1&mostRecent=true&stationString=KABI' 2> /dev/null |\
+      tee -a $HOME/dwmstart.log | xmllint --xpath "string(//temp_c)" /dev/stdin)
+   [[ $? -gt 0 ]] && return 1
+   local temp=$(echo "$temp*1.8+32" | bc | sed 's/\.//')   # removing demimal so bash can round it by /10
+   DWMBAR_TEMP=$(( "$temp" / 10 ))
+}
+
+volume () {
+   local vol=$(pamixer --get-volume-human | sed 's/\%//')
+   local icon=""
+   [[ $vol -ge 80 ]] && local icon="🕪"
+   [[ $vol -ge 40 ]] && local icon="🕩"
+   [[ $vol -lt 40 ]] && local icon="🕨"
+   [ "$vol" == "muted" ] && local icon="🔇"
+   
+   DWMBAR_VOL="$(pamixer --get-volume-human) $icon"
+}
+
+vpncheck () {
+   local wgrun=$(wg &> /dev/null && echo 0 || echo 1) 
+   [[ $wgrun -gt 0 ]] && DWMBAR_VPN="✔" || DWMBAR_VPN="✘"
+}
+
+torrentdown () {
+   local tm=$(transmission-remote $(cat $HOME/.tminject) -l | awk '/Sum/ {print $5}'| numfmt --from-unit 1024 --to=iec)
+   expr "$tm" != 0 &> /dev/null && DWMBAR_TMDOWN="🡫$tm" || unset DWMBAR_TMDOWN
+}
+
+torrentup () {
+   local tm=$(transmission-remote $(cat $HOME/.tminject) -l | awk '/Sum/ {print $4}'| numfmt --from-unit 1024 --to=iec)
+   expr "$tm" != 0 &> /dev/null && DWMBAR_TMUP="🡩$tm" || unset DWMBAR_TMUP
+   
+}
+
+testfunc () {
+   (( tc++ ))
+   $DWMBAR_TEST="test $tc"
+}
+
+ct=0
+while true; do
+   cputemp
+  	gputemp
+  	timedate
+   volume
+   vpncheck
+   torrentdown
+   torrentup
+   [[ $(( "$ct" % 180 )) -eq 0 ]] && updates &&	mainline # '% n': n = minutes * (60s / sleep timer) 
+#	[[ $(( "ct" % 120 )) -eq 0 ]] && temperature
+
+   # If there's any torrent activity then place the torrent active icon on the bar.
+   [[ ! -z $DWMBAR_TMDOWN ]] || [[ ! -z $DMBAR_TMUP ]] && DWMBAR_ACTIVETORRENT="🕱" || unset DWMBAR_ACTIVETORRENT
+   xsetroot -name "$DWMBAR_MAINLINE $DWMBAR_ACTIVETORRENT$DWMBAR_TMDOWN$DWMBAR_TMUP   vpn $DWMBAR_VPN    $DWMBAR_VOL    $DWMBAR_TEMP°F🌡️    cpu $DWMBAR_CPUTEMP°C🌡️    gpu $DWMBAR_GPUTEMP°C🌡️     updates: $DWMBAR_UPDATES    |    $DWMBAR_TIMEDATE " 
+   sleep 10s
+   (( ct++ ))
+done
+
